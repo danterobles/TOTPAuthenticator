@@ -1,5 +1,5 @@
 <?php
-
+namespace TOTP;
 /**
  * TOTPAuthenticator - A class for generating and validating TOTP codes
  * 

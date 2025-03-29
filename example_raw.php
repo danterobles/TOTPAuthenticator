@@ -1,6 +1,6 @@
 <?php
 
-require_once 'TOTPAuthenticator.php';
+require_once 'src/TOTPAuthenticator.php';
 
 // Example usage
 $email = 'drobles@mailinator.com';
