@@ -3,13 +3,13 @@
 require_once 'TOTPAuthenticator.php';
 
 // Example usage
-$email = 'drobles@doitconsulting.mx';
-$issuer = 'DoITConsulting';
+$email = 'drobles@mailinator.com';
+$issuer = 'Empresa';
 
 // Create a new authenticator with a random secret
 //$auth = new TOTPAuthenticator();
 // Or use an existing secret
-$auth = new TOTPAuthenticator("OEXMEKHMDA63IVDJ");
+$auth = new TOTPAuthenticator("BASE32_SECRET");
 
 // Get the secret (store this in your database)
 $secret = $auth->getSecret();
