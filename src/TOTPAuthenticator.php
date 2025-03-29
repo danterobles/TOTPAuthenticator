@@ -1,5 +1,10 @@
 <?php
+declare(strict_types=1);
+
 namespace TOTP;
+
+use InvalidArgumentException;
+
 /**
  * TOTPAuthenticator - A class for generating and validating TOTP codes
  * 
@@ -25,7 +30,7 @@ class TOTPAuthenticator
     /**
      * @var string Alphabet used for Base32 encoding/decoding
      */
-    private static $base32Alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+    private const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
     
     /**
      * Constructor
@@ -34,16 +39,18 @@ class TOTPAuthenticator
      * @param int $digits Number of digits in generated code
      * @param int $timeStep Time step in seconds
      */
-    public function __construct($secret = null, $digits = 6, $timeStep = 30)
+    public function __construct(?string $secret = null, int $digits = 6, int $timeStep = 30)
     {
+        if ($digits < 6 || $digits > 8) {
+            throw new InvalidArgumentException("The number of digits must be between 6 and 8.");
+        }
+        if ($timeStep <= 0) {
+            throw new InvalidArgumentException("The time interval must be a positive number.");
+        }
+
         $this->digits = $digits;
         $this->timeStep = $timeStep;
-        
-        if ($secret === null) {
-            $this->secret = $this->generateSecureSecret();
-        } else {
-            $this->secret = $secret;
-        }
+        $this->secret = $secret ?? self::generateSecureSecret();
     }
     
     /**
@@ -51,7 +58,7 @@ class TOTPAuthenticator
      * 
      * @return string Base32 encoded secret
      */
-    public function getSecret()
+    public function getSecret(): string
     {
         return $this->secret;
     }
@@ -62,10 +69,9 @@ class TOTPAuthenticator
      * @param int $byteLength Length of random bytes before encoding
      * @return string Base32 encoded secret
      */
-    public function generateSecureSecret($byteLength = 10)
+    public static function generateSecureSecret(int $byteLength = 10): string
     {
-        $randomBytes = random_bytes($byteLength);
-        return $this->encodeBase32($randomBytes);
+        return self::encodeBase32(random_bytes($byteLength));
     }
     
     /**
@@ -73,10 +79,9 @@ class TOTPAuthenticator
      * 
      * @return string TOTP code
      */
-    public function generateCode()
+    public function generateCode(): string
     {
-        $time = floor(time() / $this->timeStep);
-        return $this->generateCodeForInterval($time);
+        return $this->generateCodeForInterval((int) floor(time() / $this->timeStep));
     }
     
     /**
@@ -85,21 +90,21 @@ class TOTPAuthenticator
      * @param int $interval Time interval
      * @return string TOTP code
      */
-    public function generateCodeForInterval($interval)
+    public function generateCodeForInterval(int $interval): string
     {
-        $binaryTime = pack('N*', 0) . pack('N*', $interval);
-        $key = $this->base32Decode($this->secret);
+        $binaryTime = pack('J', $interval);
+        $key = self::base32Decode($this->secret);
         $hash = hash_hmac('sha1', $binaryTime, $key, true);
 
-        $offset = ord($hash[19]) & 0xf;
+        $offset = ord($hash[19]) & 0xF;
         $binaryCode = (
-            (ord($hash[$offset]) & 0x7f) << 24 |
-            (ord($hash[$offset + 1]) & 0xff) << 16 |
-            (ord($hash[$offset + 2]) & 0xff) << 8 |
-            (ord($hash[$offset + 3]) & 0xff)
+            (ord($hash[$offset]) & 0x7F) << 24 |
+            (ord($hash[$offset + 1]) & 0xFF) << 16 |
+            (ord($hash[$offset + 2]) & 0xFF) << 8 |
+            (ord($hash[$offset + 3]) & 0xFF)
         );
 
-        return str_pad($binaryCode % pow(10, $this->digits), $this->digits, '0', STR_PAD_LEFT);
+        return str_pad((string) ($binaryCode % (10 ** $this->digits)), $this->digits, '0', STR_PAD_LEFT);
     }
     
     /**
@@ -109,17 +114,20 @@ class TOTPAuthenticator
      * @param int $window Window of intervals to check before/after current time
      * @return bool True if code is valid
      */
-    public function verifyCode($inputCode, $window = 1)
+    public function verifyCode(string $inputCode, int $window = 1): bool
     {
-        $currentInterval = floor(time() / $this->timeStep);
-        
+        if ($window < 0) {
+            throw new InvalidArgumentException("The window parameter cannot be negative.");
+        }
+
+        $currentInterval = (int) floor(time() / $this->timeStep);
+
         for ($i = -$window; $i <= $window; $i++) {
-            $code = $this->generateCodeForInterval($currentInterval + $i);
-            if (hash_equals($code, $inputCode)) {
+            if (hash_equals($this->generateCodeForInterval($currentInterval + $i), $inputCode)) {
                 return true;
             }
         }
-        
+
         return false;
     }
     
@@ -130,12 +138,20 @@ class TOTPAuthenticator
      * @param string $issuer Name of the service/company providing authentication
      * @return string otpauth:// URL for QR code
      */
-    public function getQRCodeUrl($accountName, $issuer)
+    public function getQRCodeUrl(string $accountName, string $issuer): string
     {
-        $issuer = rawurlencode($issuer);
-        $accountName = rawurlencode($accountName);
-        
-        return "otpauth://totp/{$issuer}:{$accountName}?secret={$this->secret}&issuer={$issuer}&digits={$this->digits}&period={$this->timeStep}";
+        $encodedIssuer = rawurlencode($issuer);
+        $encodedAccount = rawurlencode($accountName);
+
+        return sprintf(
+            "otpauth://totp/%s:%s?secret=%s&issuer=%s&digits=%d&period=%d",
+            $encodedIssuer,
+            $encodedAccount,
+            $this->secret,
+            $encodedIssuer,
+            $this->digits,
+            $this->timeStep
+        );
     }
     
     /**
@@ -144,21 +160,17 @@ class TOTPAuthenticator
      * @param string $binary Binary data to encode
      * @return string Base32 encoded string
      */
-    public function encodeBase32($binary)
+    public static function encodeBase32(string $binary): string
     {
         $base32 = '';
         $buffer = '';
 
-        for ($i = 0; $i < strlen($binary); $i++) {
-            $buffer .= str_pad(decbin(ord($binary[$i])), 8, '0', STR_PAD_LEFT);
+        foreach (str_split($binary) as $byte) {
+            $buffer .= str_pad(decbin(ord($byte)), 8, '0', STR_PAD_LEFT);
         }
 
-        for ($i = 0; $i < strlen($buffer); $i += 5) {
-            $chunk = substr($buffer, $i, 5);
-            if (strlen($chunk) < 5) {
-                $chunk = str_pad($chunk, 5, '0', STR_PAD_RIGHT);
-            }
-            $base32 .= self::$base32Alphabet[bindec($chunk)];
+        foreach (str_split($buffer, 5) as $chunk) {
+            $base32 .= self::BASE32_ALPHABET[bindec(str_pad($chunk, 5, '0', STR_PAD_RIGHT))];
         }
 
         return $base32;
@@ -170,25 +182,18 @@ class TOTPAuthenticator
      * @param string $base32 Base32 encoded string
      * @return string Decoded binary data
      */
-    public function base32Decode($base32)
+    public static function base32Decode(string $base32): string
     {
         $base32 = strtoupper($base32);
         $bits = '';
-        $value = '';
 
-        for ($i = 0; $i < strlen($base32); $i++) {
-            $char = $base32[$i];
-            $pos = strpos(self::$base32Alphabet, $char);
-            if ($pos === false) {
-                continue;
+        foreach (str_split($base32) as $char) {
+            $pos = strpos(self::BASE32_ALPHABET, $char);
+            if ($pos !== false) {
+                $bits .= str_pad(decbin($pos), 5, '0', STR_PAD_LEFT);
             }
-            $bits .= str_pad(decbin($pos), 5, '0', STR_PAD_LEFT);
         }
 
-        for ($i = 0; $i + 8 <= strlen($bits); $i += 8) {
-            $value .= chr(bindec(substr($bits, $i, 8)));
-        }
-
-        return $value;
+        return pack('C*', ...array_map(fn($byte) => bindec($byte), str_split($bits, 8)));
     }
 }
