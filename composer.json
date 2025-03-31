@@ -27,5 +27,5 @@
       "php": ">=7.0"
     },
     "minimum-stability": "stable",
-    "version": "1.0.0"
+    "version": "v1.0.0"
   }
