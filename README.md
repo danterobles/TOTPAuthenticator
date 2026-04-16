@@ -6,49 +6,53 @@
 
 ## Features
 
-- Generate secure random secrets for TOTP authentication
+- Generate secure random secrets for TOTP authentication (minimum 128 bits / 16 bytes)
 - Create and validate time-based one-time passwords
 - Generate QR code URLs for easy setup with authenticator apps
-- Customizable code length and time step
+- Generate backup codes for account recovery
+- Input validation with descriptive exceptions for invalid configuration
+- Customizable code length (6–8 digits) and time step
 - Built-in Base32 encoding/decoding
+- Full PHP 7.4+ type hints on all properties and methods
 - Compatible with all standard TOTP authenticator applications
+
+## Requirements
+
+- PHP 7.4 or higher
+- OpenSSL extension (for `random_bytes()`)
 
 ## Installation
 
 ### Raw PHP
 
-1. Simply include the `TOTPAuthenticator.php` file in your project:
+Simply include the `TOTPAuthenticator.php` file in your project:
 
 ```php
 require_once 'path/to/TOTPAuthenticator.php';
 ```
 
-### Laravel
+### Composer / Laravel
 
-1. Create a new directory in your Laravel project:
+Install via Composer:
+
 ```bash
-mkdir -p app/Services/Auth
+composer require danterobles/totp-authenticator
 ```
 
-2. Copy the `TOTPAuthenticator.php` file to this directory and update the namespace:
+Or copy `src/TOTPAuthenticator.php` to your Laravel project and update the namespace:
 
 ```php
 <?php
 
 namespace App\Services\Auth;
 
-/**
- * TOTPAuthenticator - A class for generating and validating TOTP codes
- * 
- * Implements RFC 6238 (TOTP: Time-Based One-Time Password Algorithm)
- */
 class TOTPAuthenticator
 {
     // Class content remains the same
 }
 ```
 
-3. Optionally, register it as a service in the service container by adding to your `AppServiceProvider`:
+Optionally register it as a singleton in `AppServiceProvider`:
 
 ```php
 use App\Services\Auth\TOTPAuthenticator;
@@ -66,10 +70,12 @@ public function register()
 ### Generate a New Secret
 
 ```php
-// Create a new TOTP authenticator instance with a randomly generated secret
+use TOTP\TOTPAuthenticator;
+
+// Generates a cryptographically secure random secret (20 bytes / 160 bits by default)
 $totp = new TOTPAuthenticator();
 
-// Get and store the secret (you'll need to save this in your user database)
+// Store this secret in your user database
 $secret = $totp->getSecret();
 echo "Your TOTP secret: " . $secret;
 ```
@@ -77,11 +83,12 @@ echo "Your TOTP secret: " . $secret;
 ### Verify a TOTP Code
 
 ```php
+use TOTP\TOTPAuthenticator;
+
 // Initialize with the user's stored secret
 $totp = new TOTPAuthenticator($userSecret);
 
-// Verify a code submitted by the user
-$userInputCode = $_POST['totp_code']; // Example
+$userInputCode = $_POST['totp_code'];
 if ($totp->verifyCode($userInputCode)) {
     echo "Code is valid!";
 } else {
@@ -92,51 +99,84 @@ if ($totp->verifyCode($userInputCode)) {
 ### Generate a QR Code URL
 
 ```php
+use TOTP\TOTPAuthenticator;
+
 $totp = new TOTPAuthenticator($userSecret);
 $qrCodeUrl = $totp->getQRCodeUrl('user@example.com', 'My Application');
 
-// You can use this URL with a QR code generation library
-// Example with a CDN-based QR code generator:
+// Use with any QR code generation library
 echo "<img src='https://chart.googleapis.com/chart?chs=200x200&cht=qr&chl=" . urlencode($qrCodeUrl) . "&choe=UTF-8'>";
 ```
+
+### Generate Backup Codes
+
+```php
+use TOTP\TOTPAuthenticator;
+
+$totp = new TOTPAuthenticator($userSecret);
+
+// Returns an array of plain-text backup codes
+$backupCodes = $totp->generateBackupCodes(count: 10, length: 10);
+
+// Show plain codes once to the user, then store only the hashed versions
+$hashedCodes = array_map(fn($code) => password_hash($code, PASSWORD_DEFAULT), $backupCodes);
+
+// Save $hashedCodes to database
+```
+
+## Advanced Configuration
+
+The constructor accepts optional parameters to customize code generation:
+
+```php
+// 8-digit codes valid for 60 seconds
+$totp = new TOTPAuthenticator(secret: null, digits: 8, timeStep: 60);
+```
+
+| Parameter | Type | Default | Constraints |
+|-----------|------|---------|-------------|
+| `$secret` | `?string` | `null` (auto-generated) | Valid Base32, min 128 bits decoded |
+| `$digits` | `int` | `6` | Must be between 6 and 8 |
+| `$timeStep` | `int` | `30` | Must be a positive integer |
+
+Invalid values throw `\InvalidArgumentException` with a descriptive message.
 
 ## Integration Examples
 
 ### Raw PHP Authentication Flow
 
 ```php
-// User registration - generate and store secret
-function registerUser($username, $password) {
+use TOTP\TOTPAuthenticator;
+
+function registerUser(string $username, string $password): string
+{
     $totp = new TOTPAuthenticator();
     $secret = $totp->getSecret();
-    
-    // Hash password securely
+
     $passwordHash = password_hash($password, PASSWORD_DEFAULT);
-    
-    // Store in database
-    $db->query("INSERT INTO users (username, password_hash, totp_secret) 
-                VALUES (?, ?, ?)", [$username, $passwordHash, $secret]);
-                
-    // Return QR code URL for setup
+
+    $db->query(
+        "INSERT INTO users (username, password_hash, totp_secret) VALUES (?, ?, ?)",
+        [$username, $passwordHash, $secret]
+    );
+
     return $totp->getQRCodeUrl($username, 'My Application');
 }
 
-// User login - validate password and TOTP code
-function loginUser($username, $password, $totpCode) {
-    // Fetch user from database
+function loginUser(string $username, string $password, string $totpCode): bool
+{
     $user = $db->query("SELECT * FROM users WHERE username = ?", [$username])->fetch();
-    
+
     if (!$user || !password_verify($password, $user['password_hash'])) {
-        return false; // Invalid username or password
+        return false;
     }
-    
-    // Verify TOTP code
+
     $totp = new TOTPAuthenticator($user['totp_secret']);
+
     if (!$totp->verifyCode($totpCode)) {
-        return false; // Invalid TOTP code
+        return false;
     }
-    
-    // Authentication successful
+
     $_SESSION['user_id'] = $user['id'];
     return true;
 }
@@ -144,9 +184,7 @@ function loginUser($username, $password, $totpCode) {
 
 ### Laravel Integration Example
 
-Here's how to integrate TOTP authentication with Laravel's built-in authentication:
-
-#### Create a New Middleware
+#### Middleware
 
 ```php
 <?php
@@ -162,23 +200,21 @@ class RequireTOTP
     public function handle($request, Closure $next)
     {
         $user = Auth::user();
-        
-        // Skip TOTP check if not enabled for this user
+
         if (!$user->totp_enabled) {
             return $next($request);
         }
-        
-        // Check if user has passed TOTP verification this session
+
         if (!session('totp_verified')) {
             return redirect()->route('totp.verify');
         }
-        
+
         return $next($request);
     }
 }
 ```
 
-#### Create Controller Methods
+#### Controller
 
 ```php
 <?php
@@ -194,8 +230,7 @@ class TOTPController extends Controller
     public function setup()
     {
         $user = auth()->user();
-        
-        // Generate new secret if user doesn't have one
+
         if (!$user->totp_secret) {
             $totp = new TOTPAuthenticator();
             $user->totp_secret = $totp->getSecret();
@@ -203,116 +238,73 @@ class TOTPController extends Controller
         } else {
             $totp = new TOTPAuthenticator($user->totp_secret);
         }
-        
-        $qrCodeUrl = $totp->getQRCodeUrl($user->email, config('app.name'));
-        
+
         return view('auth.totp.setup', [
-            'secret' => $user->totp_secret,
-            'qrCodeUrl' => $qrCodeUrl
+            'secret'     => $user->totp_secret,
+            'qrCodeUrl'  => $totp->getQRCodeUrl($user->email, config('app.name')),
+            'backupCodes' => $totp->generateBackupCodes(),
         ]);
     }
-    
+
     public function enable(Request $request)
     {
         $user = auth()->user();
         $totp = new TOTPAuthenticator($user->totp_secret);
-        
-        // Verify code before enabling TOTP
+
         if ($totp->verifyCode($request->code)) {
             $user->totp_enabled = true;
             $user->save();
-            
+
             return redirect()->route('dashboard')
                 ->with('status', 'Two-factor authentication has been enabled.');
         }
-        
+
         return back()->withErrors(['code' => 'The verification code is invalid.']);
     }
-    
+
     public function verify()
     {
         return view('auth.totp.verify');
     }
-    
+
     public function validate(Request $request)
     {
         $user = auth()->user();
         $totp = new TOTPAuthenticator($user->totp_secret);
-        
+
         if ($totp->verifyCode($request->code)) {
-            // Mark session as TOTP verified
             session(['totp_verified' => true]);
-            
             return redirect()->intended('dashboard');
         }
-        
+
         return back()->withErrors(['code' => 'The verification code is invalid.']);
     }
 }
 ```
 
-#### Setup Routes
+#### Routes
 
 ```php
 Route::middleware(['auth'])->group(function () {
-    Route::get('/totp/setup', [TOTPController::class, 'setup'])->name('totp.setup');
-    Route::post('/totp/enable', [TOTPController::class, 'enable'])->name('totp.enable');
-    Route::get('/totp/verify', [TOTPController::class, 'verify'])->name('totp.verify');
+    Route::get('/totp/setup',    [TOTPController::class, 'setup'])->name('totp.setup');
+    Route::post('/totp/enable',  [TOTPController::class, 'enable'])->name('totp.enable');
+    Route::get('/totp/verify',   [TOTPController::class, 'verify'])->name('totp.verify');
     Route::post('/totp/validate', [TOTPController::class, 'validate'])->name('totp.validate');
-    
-    // Apply TOTP middleware to protected routes
+
     Route::middleware(['require.totp'])->group(function () {
         Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
-        // Add other protected routes here
     });
 });
 ```
 
-## Advanced Configuration
-
-When creating a new `TOTPAuthenticator` instance, you can customize:
-
-- **Digits**: The number of digits in the generated code (default: 6)
-- **Time Step**: The time interval in seconds for which codes are valid (default: 30)
-
-```php
-// Create a TOTP authenticator with 8-digit codes and 60-second validity
-$totp = new TOTPAuthenticator(null, 8, 60);
-```
-
 ## Security Considerations
 
-- Always store TOTP secrets securely in your database
+- Always store TOTP secrets securely in your database (consider encrypting at rest)
+- Store backup codes **hashed** (e.g. `password_hash()`), never in plain text
 - Use HTTPS to prevent man-in-the-middle attacks
-- Consider implementing rate limiting to prevent brute-force attacks
-- Provide backup codes in case users lose access to their authenticator app
-- Use the `hash_equals()` function (as the class does internally) to prevent timing attacks
-
-## Example Implementation with Backup Codes
-
-```php
-// Generate backup codes when setting up TOTP
-function generateBackupCodes() {
-    $codes = [];
-    for ($i = 0; $i < 10; $i++) {
-        $codes[] = substr(bin2hex(random_bytes(8)), 0, 10);
-    }
-    return $codes;
-}
-
-// Store hashed backup codes in database
-$backupCodes = generateBackupCodes();
-$hashedCodes = array_map(function($code) {
-    return password_hash($code, PASSWORD_DEFAULT);
-}, $backupCodes);
-
-// Save $hashedCodes to database and show $backupCodes to user
-```
-
-## Requirements
-
-- PHP 7.0 or higher
-- OpenSSL extension for `random_bytes()` function
+- Implement rate limiting to prevent brute-force attacks
+- The class uses `hash_equals()` internally to prevent timing attacks
+- Secrets must be at least 128 bits (16 decoded bytes) — enforced by the constructor
 
 ## License
 
